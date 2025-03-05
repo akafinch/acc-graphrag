@@ -55,7 +55,17 @@ class OllamaClient:
         try:
             response = self.client.get(f"{self.base_url}/api/tags")
             if response.status_code == 200:
-                return [model["name"] for model in response.json().get("models", [])]
+                models = []
+                for model in response.json().get("models", []):
+                    # Extract model name, handling different formats
+                    model_name = model.get("name", "")
+                    # If name contains a tag (e.g., llama3:latest), split and take the model name only
+                    if ":" in model_name:
+                        model_name = model_name.split(":")[0]
+                    if model_name:
+                        models.append(model_name)
+                logger.info(f"Available models: {', '.join(models)}")
+                return models
             else:
                 logger.error(f"Failed to list models: {response.text}")
                 return []

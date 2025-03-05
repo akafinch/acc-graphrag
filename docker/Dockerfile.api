@@ -14,11 +14,17 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Download all NLTK data to ensure all resources are available
+RUN python -c "import nltk; nltk.download('all')"
+
 # Copy application code
 COPY . .
 
 # Expose the API port
 EXPOSE 8000
+
+# Make sure Python can find modules in the current directory
+ENV PYTHONPATH=/app
 
 # Command to run the API
 CMD ["python", "-m", "api.main"] 

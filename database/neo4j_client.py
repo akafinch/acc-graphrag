@@ -25,12 +25,17 @@ class Neo4jClient:
         password: str = NEO4J_PASSWORD,
         database: str = NEO4J_DATABASE
     ):
-        """Initialize the Neo4j client."""
+        """
+        Initialize the Neo4j client with connection details.
+        """
         self.uri = uri
         self.user = user
         self.password = password
-        self.database = database
+        # Always use 'neo4j' database in Community Edition
+        self.database = "neo4j"
         self.driver = None
+        
+        logger.info(f"Initialized Neo4j client with URI: {uri}, Database: {self.database}")
         
     def connect(self) -> None:
         """Connect to the Neo4j database."""
@@ -56,38 +61,43 @@ class Neo4jClient:
         """
         Set up the database schema with constraints and indexes.
         """
-        with self.driver.session(database=self.database) as session:
-            # Create constraints for each node type
-            for node_type in NODE_TYPES:
-                constraint_name = f"{node_type.lower()}_id_constraint"
-                query = f"""
-                CREATE CONSTRAINT {constraint_name} IF NOT EXISTS
-                FOR (n:{node_type})
-                REQUIRE n.id IS UNIQUE
-                """
-                session.run(query)
-                logger.info(f"Created constraint: {constraint_name}")
-                
-                # Create fulltext indexes for searchable properties
-                if "name" in NODE_TYPES[node_type]["properties"]:
-                    index_name = f"{node_type.lower()}_name_index"
-                    query = f"""
-                    CREATE FULLTEXT INDEX {index_name} IF NOT EXISTS
-                    FOR (n:{node_type})
-                    ON EACH [n.name]
-                    """
-                    session.run(query)
-                    logger.info(f"Created fulltext index: {index_name}")
-                
-                if "description" in NODE_TYPES[node_type]["properties"]:
-                    index_name = f"{node_type.lower()}_description_index"
-                    query = f"""
-                    CREATE FULLTEXT INDEX {index_name} IF NOT EXISTS
-                    FOR (n:{node_type})
-                    ON EACH [n.description]
-                    """
-                    session.run(query)
-                    logger.info(f"Created fulltext index: {index_name}")
+        try:
+            with self.driver.session(database=self.database) as session:
+                # Check if we can connect
+                result = session.run("RETURN 1 as test").single()
+                if result and result["test"] == 1:
+                    logger.info(f"Connected to database '{self.database}'")
+                    
+                    # Create constraints for each node type
+                    for node_type in NODE_TYPES:
+                        constraint_name = f"{node_type.lower()}_id_constraint"
+                        query = f"""
+                        CREATE CONSTRAINT {constraint_name} IF NOT EXISTS
+                        FOR (n:{node_type})
+                        REQUIRE n.id IS UNIQUE
+                        """
+                        session.run(query)
+                        logger.info(f"Created constraint: {constraint_name}")
+                    
+                    # Try to create simple indexes for searchable properties
+                    # This is more compatible across Neo4j versions
+                    for node_type in NODE_TYPES:
+                        # Create standard indexes for common properties
+                        for prop in ["name", "title", "content", "description"]:
+                            if prop in NODE_TYPES[node_type]["properties"]:
+                                try:
+                                    index_name = f"{node_type.lower()}_{prop}_index"
+                                    query = f"""
+                                    CREATE INDEX {index_name} IF NOT EXISTS 
+                                    FOR (n:{node_type}) 
+                                    ON (n.{prop})
+                                    """
+                                    session.run(query)
+                                    logger.info(f"Created index: {index_name}")
+                                except Exception as e:
+                                    logger.warning(f"Could not create index on {node_type}.{prop}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error setting up database schema: {str(e)}")
     
     def run_query(
         self, 
@@ -123,24 +133,30 @@ class Neo4jClient:
         properties: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Create a node in the graph database.
+        Create or update a node in the graph database.
         
         Args:
             node_type: Type of node to create
             properties: Node properties
         
         Returns:
-            Created node data
+            Created or updated node data
         """
         if node_type not in NODE_TYPES:
             raise ValueError(f"Invalid node type: {node_type}")
         
+        # Use MERGE instead of CREATE to handle existing nodes
         query = f"""
-        CREATE (n:{node_type} $properties)
+        MERGE (n:{node_type} {{id: $properties.id}})
+        SET n += $properties
         RETURN n
         """
-        result = self.run_query(query, {"properties": properties})
-        return result[0]["n"] if result else None
+        try:
+            result = self.run_query(query, {"properties": properties})
+            return result[0]["n"] if result else None
+        except Exception as e:
+            logger.error(f"Error creating/updating {node_type} node: {str(e)}")
+            raise
     
     def create_relationship(
         self, 
@@ -150,7 +166,7 @@ class Neo4jClient:
         properties: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Create a relationship between two nodes.
+        Create or update a relationship between two nodes.
         
         Args:
             from_node_id: ID of the source node
@@ -159,7 +175,7 @@ class Neo4jClient:
             properties: Relationship properties
         
         Returns:
-            Created relationship data
+            Created or updated relationship data
         """
         if relationship_type not in RELATIONSHIP_TYPES:
             raise ValueError(f"Invalid relationship type: {relationship_type}")
@@ -169,16 +185,22 @@ class Neo4jClient:
         query = f"""
         MATCH (a), (b)
         WHERE a.id = $from_id AND b.id = $to_id
-        CREATE (a)-[r:{relationship_type} $properties]->(b)
+        MERGE (a)-[r:{relationship_type}]->(b)
+        SET r += $properties
         RETURN a, r, b
         """
-        parameters = {
-            "from_id": from_node_id,
-            "to_id": to_node_id,
-            "properties": properties
-        }
-        result = self.run_query(query, parameters)
-        return result[0] if result else None
+        
+        try:
+            result = self.run_query(query, {
+                "from_id": from_node_id,
+                "to_id": to_node_id,
+                "properties": properties
+            })
+            
+            return result[0] if result else None
+        except Exception as e:
+            logger.warning(f"Error creating relationship from {from_node_id} to {to_node_id}: {str(e)}")
+            return None
     
     def get_node_by_id(self, node_id: str) -> Dict[str, Any]:
         """

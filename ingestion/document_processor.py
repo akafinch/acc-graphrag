@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import langchain
 from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (DirectoryLoader, PDFLoader,
+from langchain_community.document_loaders import (DirectoryLoader,
                                                PyPDFLoader,
                                                TextLoader, UnstructuredPDFLoader)
 import numpy as np
@@ -187,13 +187,17 @@ class DocumentProcessor:
     
     def extract_entities(
         self, 
-        chunks: List[Document]
+        chunks: List[Document],
+        batch_size: int = 5,  # Process chunks in batches
+        timeout_per_chunk: int = 60  # 60 second timeout per chunk
     ) -> List[Dict[str, Any]]:
         """
         Extract entities from document chunks using LLM.
         
         Args:
             chunks: List of document chunks
+            batch_size: Number of chunks to process at once
+            timeout_per_chunk: Maximum seconds to spend per chunk
         
         Returns:
             List of entity dictionaries
@@ -241,39 +245,97 @@ class DocumentProcessor:
         Remember to ONLY return valid JSON.
         """
         
-        for chunk in tqdm(chunks, desc="Extracting entities"):
-            try:
-                prompt = prompt_template.format(text=chunk.page_content)
-                response = self.ollama_client.generate_text(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    temperature=0.2
-                )
-                
-                # Extract JSON from the response
+        # Process only a random sample of chunks if there are too many
+        if len(chunks) > 100:
+            logging.warning(f"Large number of chunks ({len(chunks)}). Processing a representative sample for entities.")
+            # Take a representative sample of chunks (at most 100)
+            import random
+            random.seed(42)  # For reproducibility
+            sampled_chunks = random.sample(chunks, min(100, len(chunks)))
+            chunks_to_process = sampled_chunks
+        else:
+            chunks_to_process = chunks
+            
+        # Process chunks in batches
+        total_chunks = len(chunks_to_process)
+        for i in range(0, total_chunks, batch_size):
+            batch = chunks_to_process[i:i+batch_size]
+            
+            # Process batch with progress information
+            logging.info(f"Processing entity batch {i//batch_size + 1} of {(total_chunks + batch_size - 1)//batch_size} ({i}/{total_chunks} chunks)")
+            
+            for chunk_idx, chunk in enumerate(tqdm(batch, desc=f"Extracting entities (batch {i//batch_size + 1})")):
                 try:
-                    # Find the JSON part in the response
-                    json_start = response.find('{')
-                    json_end = response.rfind('}') + 1
-                    if json_start >= 0 and json_end > json_start:
-                        json_str = response[json_start:json_end]
-                        data = json.loads(json_str)
+                    # Skip very short chunks (likely not meaningful content)
+                    if len(chunk.page_content.strip()) < 100:
+                        logging.info(f"Skipping short chunk ({len(chunk.page_content)} chars)")
+                        continue
+                    
+                    prompt = prompt_template.format(text=chunk.page_content[:1500])  # Limit text size
+                    
+                    # Set timeout for this operation
+                    import threading
+                    import time
+                    
+                    response = None
+                    extraction_error = None
+                    
+                    def extract_with_timeout():
+                        nonlocal response, extraction_error
+                        try:
+                            response = self.ollama_client.generate_text(
+                                prompt=prompt,
+                                system_prompt=system_prompt,
+                                temperature=0.2
+                            )
+                        except Exception as e:
+                            extraction_error = e
+                    
+                    # Run extraction with timeout
+                    thread = threading.Thread(target=extract_with_timeout)
+                    thread.start()
+                    thread.join(timeout=timeout_per_chunk)
+                    
+                    if thread.is_alive():
+                        logging.warning(f"Extraction timed out for chunk {i + chunk_idx} after {timeout_per_chunk} seconds")
+                        continue
+                    
+                    if extraction_error:
+                        logging.error(f"Error in chunk {i + chunk_idx}: {str(extraction_error)}")
+                        continue
                         
-                        # Add source metadata to each entity
-                        for entity in data.get("entities", []):
-                            entity["source"] = {
-                                "section_id": chunk.metadata.get("section_id"),
-                                "document_id": chunk.metadata.get("id"),
-                                "partner": chunk.metadata.get("partner"),
-                                "source": chunk.metadata.get("source")
-                            }
-                        
-                        entities.extend(data.get("entities", []))
+                    if not response:
+                        logging.warning(f"No response for chunk {i + chunk_idx}")
+                        continue
+                    
+                    # Extract JSON from the response
+                    try:
+                        # Find the JSON part in the response
+                        json_start = response.find('{')
+                        json_end = response.rfind('}') + 1
+                        if json_start >= 0 and json_end > json_start:
+                            json_str = response[json_start:json_end]
+                            data = json.loads(json_str)
+                            
+                            # Add source metadata to each entity
+                            for entity in data.get("entities", []):
+                                entity["source"] = {
+                                    "section_id": chunk.metadata.get("section_id"),
+                                    "document_id": chunk.metadata.get("id"),
+                                    "partner": chunk.metadata.get("partner"),
+                                    "source": chunk.metadata.get("source")
+                                }
+                                
+                                # Add these entities to our results
+                                entities.append(entity)
+                        else:
+                            logging.warning(f"Could not find JSON in response for chunk {i + chunk_idx}")
+                    except json.JSONDecodeError:
+                        logging.error(f"Invalid JSON from LLM for chunk {i + chunk_idx}: {response}")
                 except Exception as e:
-                    logger.error(f"Error parsing entity JSON from response: {str(e)}")
-            except Exception as e:
-                logger.error(f"Error extracting entities from chunk {chunk.metadata.get('section_id', 'unknown')}: {str(e)}")
+                    logging.error(f"Error processing chunk {i + chunk_idx}: {str(e)}")
         
+        logging.info(f"Extracted {len(entities)} entities from {total_chunks} chunks")
         return entities
     
     def save_processed_documents(
@@ -362,13 +424,19 @@ class DocumentProcessor:
     
     def process_partner_documents(
         self, 
-        partner_name: str
+        partner_name: str,
+        skip_entity_extraction: bool = False,
+        entity_sample_limit: int = 100,
+        entity_timeout: int = 60
     ) -> Tuple[List[Document], List[Dict[str, Any]]]:
         """
         Process all documents for a partner.
         
         Args:
             partner_name: Name of the partner
+            skip_entity_extraction: If True, skip the entity extraction step
+            entity_sample_limit: Maximum number of chunks to process for entity extraction
+            entity_timeout: Timeout in seconds per chunk for entity extraction
         
         Returns:
             Tuple of (processed document chunks, extracted entities)
@@ -383,15 +451,42 @@ class DocumentProcessor:
         
         # Split into chunks
         chunks = self.split_documents(documents)
+        logger.info(f"Split documents into {len(chunks)} chunks")
         
         # Generate embeddings
         chunks = self.generate_embeddings(chunks)
         
-        # Extract entities
-        entities = self.extract_entities(chunks)
-        
-        # Save processed data
+        # Save processed data first (so we don't lose work if entity extraction fails)
         self.save_processed_documents(chunks, partner_name)
-        self.save_extracted_entities(entities, partner_name)
+        
+        # Extract entities (optional)
+        entities = []
+        if not skip_entity_extraction:
+            logger.info(f"Extracting entities (this may take a while for {len(chunks)} chunks)")
+            try:
+                # If there are too many chunks, limit processing time by sampling
+                max_chunks = min(len(chunks), entity_sample_limit)
+                if len(chunks) > max_chunks:
+                    logger.warning(f"Limiting entity extraction to {max_chunks} chunks out of {len(chunks)} total chunks")
+                    import random
+                    random.seed(42)  # For reproducibility
+                    chunks_for_entities = random.sample(chunks, max_chunks)
+                else:
+                    chunks_for_entities = chunks
+                
+                # Process with timeout
+                entities = self.extract_entities(
+                    chunks_for_entities, 
+                    batch_size=5,
+                    timeout_per_chunk=entity_timeout
+                )
+                
+                # Save extracted entities
+                self.save_extracted_entities(entities, partner_name)
+            except Exception as e:
+                logger.error(f"Error during entity extraction: {str(e)}")
+                logger.info("Continuing with processing, but entity extraction failed")
+        else:
+            logger.info("Skipping entity extraction (--skip-entity-extraction flag set)")
         
         return chunks, entities 

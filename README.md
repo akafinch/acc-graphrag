@@ -114,14 +114,45 @@ cp /path/to/partner/documents/*.pdf data/raw/partner_name/
 5. **Process documents and load to graph**
 
 ```bash
-# Process documents for a partner
-python -m ingestion.run --partner partner_name
+# When using Docker:
+docker exec graphrag-api python -m ingestion.run [OPTIONS]
 
-# Process and load to graph
-python -m ingestion.run --partner partner_name --load-to-graph
+# When running directly:
+python -m ingestion.run [OPTIONS]
+```
 
+#### Ingestion Command-line Options
+
+| Option | Description |
+|--------|-------------|
+| `--partner PARTNER_NAME` | Name of the partner to process documents for |
+| `--source-dir SOURCE_DIR` | Source directory for documents (overrides default) |
+| `--load-to-graph` | Load processed data to the graph database |
+| `--list-partners` | List partners with documents in the raw data directory |
+| `--skip-entity-extraction` | Skip the entity extraction step (faster processing) |
+| `--entity-limit LIMIT` | Maximum number of chunks to process for entity extraction (default: 100) |
+| `--entity-timeout SECONDS` | Timeout in seconds per chunk for entity extraction (default: 60) |
+
+#### Example Commands
+
+```bash
 # List available partners
 python -m ingestion.run --list-partners
+
+# Basic processing - process documents and load to graph
+python -m ingestion.run --partner partner_name --load-to-graph
+
+# Fast processing - skip the slow entity extraction step
+python -m ingestion.run --partner partner_name --skip-entity-extraction --load-to-graph
+
+# Optimized processing for large documents
+python -m ingestion.run --partner partner_name --entity-limit 50 --entity-timeout 90 --load-to-graph
+
+# Two-phase approach for large document sets:
+# Phase 1: Process without entity extraction
+python -m ingestion.run --partner partner_name --skip-entity-extraction --load-to-graph
+# Phase 2: Add entities later from a sample of chunks
+python -m ingestion.run --partner partner_name --entity-limit 50 --entity-timeout 90 --load-to-graph
 ```
 
 6. **Access the UI**
@@ -181,10 +212,35 @@ streamlit run ui/app.py
 
 1. Create a directory in `data/raw/` with the partner name
 2. Add PDF, text, or other supported documents to this directory
-3. Run the ingestion process:
-   ```
-   python -m ingestion.run --partner partner_name --load-to-graph
-   ```
+3. Run the ingestion process with one of the following approaches:
+
+#### Basic Approach (for small to medium document sets)
+```bash
+python -m ingestion.run --partner partner_name --load-to-graph
+```
+
+#### Fast Approach (for large document sets)
+```bash
+# Skip entity extraction for faster processing
+python -m ingestion.run --partner partner_name --skip-entity-extraction --load-to-graph
+```
+
+#### Optimized Approach (for detailed entity extraction)
+```bash
+# Limit the number of chunks and set a timeout
+python -m ingestion.run --partner partner_name --entity-limit 50 --entity-timeout 90 --load-to-graph
+```
+
+#### Two-Phase Approach (recommended for very large document sets)
+```bash
+# Phase 1: Process documents without entity extraction
+python -m ingestion.run --partner partner_name --skip-entity-extraction --load-to-graph
+
+# Phase 2: Extract entities from a sample of chunks
+python -m ingestion.run --partner partner_name --entity-limit 50 --entity-timeout 90 --load-to-graph
+```
+
+The system supports various document formats including PDF, TXT, MD, and HTML, and will automatically process nested directories.
 
 ### Using the UI
 

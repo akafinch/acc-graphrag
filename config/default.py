@@ -40,6 +40,9 @@ TOP_K_RETRIEVAL = 5
 
 # Graph schema
 NODE_TYPES = {
+    "Partner": {
+        "properties": ["name", "description", "website"]
+    },
     "Document": {
         "properties": ["title", "source", "partner", "date_published"]
     },
@@ -64,6 +67,9 @@ NODE_TYPES = {
 }
 
 RELATIONSHIP_TYPES = [
+    "HAS_DOCUMENT",    # Partner -> Document
+    "HAS_ENTITY",      # Partner -> Any Entity Type
+    "HAS_SECTION",     # Document -> Section
     "CONTAINS",        # Document -> Section
     "MENTIONS",        # Section -> Concept/Product/Service/Technology
     "RELATES_TO",      # Concept -> Concept

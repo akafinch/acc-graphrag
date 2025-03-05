@@ -4,6 +4,7 @@ pydantic==2.5.2
 
 # Document processing
 langchain==0.0.335
+langchain-community==0.0.16
 llama-index==0.9.3
 pypdf==3.17.1
 unstructured==0.10.30
@@ -17,7 +18,7 @@ httpx==0.25.2
 
 # Graph database
 neo4j==5.14.0
-py2neo==2021.2.3
+py2neo==2021.2.4
 
 # API and UI
 fastapi==0.104.1
