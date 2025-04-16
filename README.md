@@ -74,14 +74,18 @@ docker-compose up -d
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/graphrag.git
-cd graphrag
+git clone https://github.com/akafinch/acc-graphrag.git
+cd acc-graphrag
 ```
 
-2. **Start the services with Docker Compose**
+2. **Install the NVIDIA Container Toolkit**
+
+Navigate to the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) documentation page and follow the directions until you have the toolkit installed and configured.
+
+3. **Start the services with Docker Compose**
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 This will start:
@@ -90,11 +94,14 @@ This will start:
 - GraphRAG API
 - Streamlit UI (accessible at http://localhost:8501)
 
-3. **Set up Ollama models**
+4. **Set up Ollama models**
 
 If the models aren't automatically pulled, you can pull them manually:
 
 ```bash
+# Enter bash on the container
+ docker exec -it <container-id> /bin/bash
+
 # Pull the LLM model for text generation
 ollama pull llama3
 
@@ -102,7 +109,7 @@ ollama pull llama3
 ollama pull nomic-embed-text
 ```
 
-4. **Add partner documents**
+5. **Add partner documents**
 
 Place partner documents in the appropriate directory:
 
@@ -111,7 +118,7 @@ mkdir -p data/raw/partner_name
 cp /path/to/partner/documents/*.pdf data/raw/partner_name/
 ```
 
-5. **Process documents and load to graph**
+6. **Process documents and load to graph**
 
 ```bash
 # When using Docker:

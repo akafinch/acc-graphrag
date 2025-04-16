@@ -349,7 +349,7 @@ def chat_page(selected_partners: List[str]):
     
     # Display chat messages
     for i, msg in enumerate(st.session_state.chat_messages):
-        message(msg, is_user=(i % 2 == 0))
+        message(msg, is_user=(i % 2 == 0), key=f"msg_{i}")
     
     # Chat input
     user_input = st.text_input("Your question:", key="chat_input")
